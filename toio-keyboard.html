@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>toio キーボード操縦</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --line:#272c36; --fg:#e8ecf3; --muted:#9aa4b5;
+    --accent:#3ea6ff; --ok:#38d39f; --warn:#ffb454; --err:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font-family:"Segoe UI",system-ui,"Noto Sans JP",sans-serif;
+       display:flex;flex-direction:column;align-items:center;padding:24px 16px 48px;gap:18px}
+  h1{font-size:20px;margin:0;letter-spacing:.04em}
+  .sub{color:var(--muted);font-size:13px;margin:-10px 0 0}
+  .wrap{width:100%;max-width:960px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .card h2{font-size:13px;color:var(--muted);margin:0 0 12px;font-weight:600;letter-spacing:.08em}
+  button{font:inherit;color:var(--fg);background:#222835;border:1px solid var(--line);
+         border-radius:10px;padding:10px 16px;cursor:pointer;transition:.12s}
+  button:hover:not(:disabled){background:#2c3446;border-color:#3b455a}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:700}
+  button.primary:hover:not(:disabled){filter:brightness(1.12);background:var(--accent)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .dot{width:9px;height:9px;border-radius:50%;background:#555;display:inline-block}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .dot.err{background:var(--err)}
+  #status{font-size:14px}
+  .pad{display:grid;grid-template-columns:repeat(3,64px);grid-template-rows:repeat(3,64px);
+       gap:8px;justify-content:center;margin:4px auto 12px}
+  .key{background:#222835;border:1px solid var(--line);border-radius:12px;display:flex;
+       align-items:center;justify-content:center;font-size:22px;color:var(--muted);
+       user-select:none;cursor:pointer;transition:.06s;flex-direction:column;line-height:1}
+  .key.hit{background:var(--accent);color:#04121f;border-color:var(--accent);transform:scale(.94)}
+  .key.blank{visibility:hidden}
+  .key small{font-size:10px;margin-top:3px;opacity:.8}
+  label{font-size:13px;color:var(--muted)}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .val{font-variant-numeric:tabular-nums;color:var(--fg);font-size:13px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td{padding:5px 0;border-bottom:1px solid var(--line)}
+  td:first-child{color:var(--muted);width:42%}
+  td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+  #log{height:150px;overflow:auto;background:#0b0d12;border:1px solid var(--line);
+       border-radius:10px;padding:10px;font-family:Consolas,monospace;font-size:11.5px;
+       color:var(--muted);line-height:1.6;white-space:pre-wrap}
+  .bar{height:7px;border-radius:4px;background:#2a3040;overflow:hidden}
+  .bar > i{display:block;height:100%;background:var(--ok);transition:.3s}
+  kbd{background:#222835;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;
+      padding:1px 6px;font-family:Consolas,monospace;font-size:11px}
+  .hint{font-size:12px;color:var(--muted);line-height:2}
+  .warnbox{background:#2a1f12;border:1px solid #5a4322;color:var(--warn);
+           padding:12px 14px;border-radius:10px;font-size:13px;max-width:960px;width:100%}
+</style>
+</head>
+<body>
+
+<h1>toio キーボード操縦</h1>
+<p class="sub">Web Bluetooth で toio コアキューブに直接つないで、十字キーで走らせます</p>
+
+<div id="unsupported" class="warnbox" style="display:none">
+  このブラウザは Web Bluetooth に対応していません。<b>Chrome</b> または <b>Edge</b> で、
+  <b>http://localhost:8000/toio-keyboard.html</b> のように開いてください（file:// では動きません）。
+</div>
+
+<div class="wrap">
+
+  <div class="card">
+    <h2>接続</h2>
+    <div class="row" style="margin-bottom:12px">
+      <button id="btnConnect" class="primary">キューブに接続</button>
+      <button id="btnDisconnect" disabled>切断</button>
+    </div>
+    <div class="row" id="status"><span class="dot" id="dot"></span><span id="statusText">未接続</span></div>
+  </div>
+
+  <div class="card">
+    <h2>キューブの状態</h2>
+    <table>
+      <tr><td>名前</td><td id="sName">-</td></tr>
+      <tr><td>バッテリー</td><td id="sBatt">-</td></tr>
+      <tr><td>ボタン</td><td id="sBtn">-</td></tr>
+      <tr><td>位置 (x, y)</td><td id="sPos">-</td></tr>
+      <tr><td>角度</td><td id="sAngle">-</td></tr>
+      <tr><td>姿勢</td><td id="sPose">-</td></tr>
+    </table>
+    <div class="bar" style="margin-top:10px"><i id="battBar" style="width:0%"></i></div>
+  </div>
+
+  <div class="card">
+    <h2>操縦（このページをクリックしてからキー入力）</h2>
+    <div class="pad">
+      <div class="key blank"></div>
+      <div class="key" data-dir="up">↑<small>W</small></div>
+      <div class="key blank"></div>
+      <div class="key" data-dir="left">←<small>A</small></div>
+      <div class="key" data-dir="stop">■<small>Space</small></div>
+      <div class="key" data-dir="right">→<small>D</small></div>
+      <div class="key blank"></div>
+      <div class="key" data-dir="down">↓<small>S</small></div>
+      <div class="key blank"></div>
+    </div>
+    <div class="hint">
+      <kbd>↑</kbd><kbd>↓</kbd> 前進 / 後退　<kbd>←</kbd><kbd>→</kbd> 旋回（同時押しで曲がりながら前進）<br>
+      <kbd>Shift</kbd> 押しながらでブースト　<kbd>Space</kbd> 停止　<kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 効果音
+    </div>
+    <div style="margin-top:14px">
+      <label>速さ <span class="val" id="spdVal">60</span> / 115</label>
+      <input type="range" id="speed" min="15" max="115" value="60">
+    </div>
+    <div style="margin-top:6px">
+      <label>旋回の強さ <span class="val" id="turnVal">0.6</span></label>
+      <input type="range" id="turn" min="0.2" max="1.5" step="0.1" value="0.6">
+    </div>
+    <div class="row" style="margin-top:14px">
+      <label>LED</label>
+      <input type="color" id="led" value="#3ea6ff" style="width:52px;height:32px;background:none;border:1px solid var(--line);border-radius:8px">
+      <button id="btnLedOff">LED 消灯</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>ログ</h2>
+    <div id="log"></div>
+    <div class="row" style="margin-top:10px">
+      <span class="val" id="motorOut" style="color:var(--muted)">L 0 / R 0</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ============================================================
+   toio コアキューブ BLE 仕様
+   サービス UUID : 10B20100-5B3B-4571-9508-CF3EFCD7BBAE
+   ============================================================ */
+const SERVICE = '10b20100-5b3b-4571-9508-cf3efcd7bbae';
+const UUID = {
+  id     : '10b20101-5b3b-4571-9508-cf3efcd7bbae', // 読み取りセンサー（位置ID）
+  motor  : '10b20102-5b3b-4571-9508-cf3efcd7bbae', // モーター
+  light  : '10b20103-5b3b-4571-9508-cf3efcd7bbae', // ランプ
+  sound  : '10b20104-5b3b-4571-9508-cf3efcd7bbae', // サウンド
+  sensor : '10b20106-5b3b-4571-9508-cf3efcd7bbae', // モーションセンサー
+  button : '10b20107-5b3b-4571-9508-cf3efcd7bbae', // ボタン
+  battery: '10b20108-5b3b-4571-9508-cf3efcd7bbae'  // バッテリー
+};
+
+const MAX_SPEED  = 115;  // 仕様上の最大速度指示値
+const DEAD_ZONE  = 8;    // 1〜7 は回らないので 0 とみなす
+const TICK_MS    = 80;   // 指令を送る間隔
+const CMD_DUR_MS = 300;  // 1回の指令の有効時間（切れたら自動停止 = 暴走防止）
+
+let device = null, server = null, chars = {}, connected = false;
+let ticker = null, wasMoving = false;
+
+const logEl = document.getElementById('log');
+function log(msg, cls){
+  const t = new Date().toLocaleTimeString('ja-JP');
+  const color = cls === 'err' ? 'color:#ff6b6b' : cls === 'ok' ? 'color:#38d39f' : '';
+  const div = document.createElement('div');
+  div.setAttribute('style', color);
+  div.textContent = '[' + t + '] ' + msg;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+/* GATT 書き込みは直列化する（同時に走らせると Chrome が例外を投げる） */
+let chain = Promise.resolve();
+function write(charName, bytes){
+  const ch = chars[charName];
+  if(!ch) return Promise.resolve();
+  chain = chain.then(async () => {
+    const data = new Uint8Array(bytes);
+    try{
+      if(ch.properties.writeWithoutResponse) await ch.writeValueWithoutResponse(data);
+      else await ch.writeValue(data);
+    }catch(e){ /* 切断直後などは無視 */ }
+  });
+  return chain;
+}
+
+/* ================= 接続 ================= */
+async function connect(){
+  if(!navigator.bluetooth){ log('Web Bluetooth が使えません', 'err'); return; }
+  try{
+    log('キューブを探しています…');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SERVICE] }, { namePrefix: 'toio' }],
+      optionalServices: [SERVICE]
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+
+    log(device.name + ' に接続中…');
+    server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SERVICE);
+
+    for(const key of Object.keys(UUID)){
+      try{ chars[key] = await svc.getCharacteristic(UUID[key]); }
+      catch(e){ log(key + ' が見つかりません', 'err'); }
+    }
+
+    await subscribe('battery', onBattery);
+    await subscribe('button',  onButton);
+    await subscribe('id',      onPositionId);
+    await subscribe('sensor',  onSensor);
+
+    connected = true;
+    setStatus(true, '接続中: ' + device.name);
+    document.getElementById('sName').textContent = device.name || '-';
+    document.getElementById('btnConnect').disabled = true;
+    document.getElementById('btnDisconnect').disabled = false;
+    log('接続しました。十字キーで動かせます', 'ok');
+
+    setLed(document.getElementById('led').value);
+    playSound(4);
+    ticker = setInterval(tick, TICK_MS);
+
+  }catch(e){
+    log('接続失敗: ' + e.message, 'err');
+    setStatus(false, '接続失敗');
+  }
+}
+
+async function subscribe(name, handler){
+  const ch = chars[name];
+  if(!ch || !ch.properties.notify) return;
+  try{
+    await ch.startNotifications();
+    ch.addEventListener('characteristicvaluechanged', e => handler(e.target.value));
+  }catch(e){ log(name + ' の通知開始に失敗', 'err'); }
+}
+
+function disconnect(){
+  if(device && device.gatt.connected){
+    stopMotor();
+    setTimeout(() => device.gatt.disconnect(), 150);
+  }
+}
+
+function onDisconnected(){
+  connected = false;
+  clearInterval(ticker); ticker = null;
+  chars = {};
+  setStatus(false, '切断されました');
+  document.getElementById('btnConnect').disabled = false;
+  document.getElementById('btnDisconnect').disabled = true;
+  log('切断されました', 'err');
+}
+
+function setStatus(ok, text){
+  const dot = document.getElementById('dot');
+  dot.className = 'dot' + (ok ? ' on' : (text.indexOf('失敗') >= 0 || text.indexOf('切断') >= 0 ? ' err' : ''));
+  document.getElementById('statusText').textContent = text;
+}
+
+/* ============================================================
+   モーター制御（時間指定つき / 制御識別値 0x02）
+     [0] 0x02  種類
+     [1] 0x01  左モーターID
+     [2] 方向  0x01=前 / 0x02=後
+     [3] 速度  0〜115
+     [4] 0x02  右モーターID
+     [5] 方向
+     [6] 速度
+     [7] 実行時間 10ms 単位（0 = 無制限）
+   有効時間を短くして連続送信することで、
+   キー離しを取りこぼしてもキューブが自動で止まる。
+   ============================================================ */
+function motorPacket(left, right, durMs){
+  const enc = v => {
+    const dir = v < 0 ? 0x02 : 0x01;
+    let s = Math.min(MAX_SPEED, Math.round(Math.abs(v)));
+    if(s < DEAD_ZONE) s = 0;
+    return [dir, s];
+  };
+  const l = enc(left), r = enc(right);
+  const dur = Math.max(0, Math.min(255, Math.round(durMs / 10)));
+  return [0x02, 0x01, l[0], l[1], 0x02, r[0], r[1], dur];
+}
+function stopMotor(){
+  return write('motor', [0x01, 0x01, 0x01, 0x00, 0x02, 0x01, 0x00]);
+}
+
+/* ============ キー入力 → 左右モーター速度 ============ */
+const keys = new Set();
+const KEYMAP = {
+  ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right',
+  KeyW:'up', KeyS:'down', KeyA:'left', KeyD:'right'
+};
+
+function computeWheels(){
+  const base = Number(document.getElementById('speed').value);
+  const gain = Number(document.getElementById('turn').value);
+  const spd  = keys.has('boost') ? MAX_SPEED : base;
+
+  const f = (keys.has('up')    ? 1 : 0) - (keys.has('down') ? 1 : 0);
+  const t = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0);
+
+  if(f === 0 && t === 0) return [0, 0];
+  if(f === 0) return [t * spd, -t * spd];          // その場旋回
+
+  // 前後進しながらの旋回：内側の車輪を落とす
+  let l = f * spd + t * spd * gain * f;
+  let r = f * spd - t * spd * gain * f;
+  const m = Math.max(Math.abs(l), Math.abs(r));
+  if(m > MAX_SPEED){ l = l / m * MAX_SPEED; r = r / m * MAX_SPEED; }
+  return [l, r];
+}
+
+function tick(){
+  if(!connected) return;
+  const w = computeWheels(), l = w[0], r = w[1];
+  const moving = Math.abs(l) >= DEAD_ZONE || Math.abs(r) >= DEAD_ZONE;
+
+  if(moving){
+    write('motor', motorPacket(l, r, CMD_DUR_MS));
+    wasMoving = true;
+  }else if(wasMoving){
+    stopMotor();
+    wasMoving = false;
+  }
+  document.getElementById('motorOut').textContent =
+    'L ' + Math.round(l) + ' / R ' + Math.round(r);
+}
+
+function paintPad(){
+  document.querySelectorAll('.key[data-dir]').forEach(el => {
+    el.classList.toggle('hit', keys.has(el.dataset.dir));
+  });
+}
+
+window.addEventListener('keydown', e => {
+  if(e.repeat) return;
+  if(e.code === 'ShiftLeft' || e.code === 'ShiftRight'){ keys.add('boost'); return; }
+  if(e.code === 'Space'){ e.preventDefault(); keys.clear(); paintPad(); stopMotor(); wasMoving = false; return; }
+  if(e.code === 'Digit1'){ playSound(3); return; }
+  if(e.code === 'Digit2'){ playSound(6); return; }
+  if(e.code === 'Digit3'){ playSound(9); return; }
+  const dir = KEYMAP[e.code];
+  if(dir){ e.preventDefault(); keys.add(dir); paintPad(); }
+});
+window.addEventListener('keyup', e => {
+  if(e.code === 'ShiftLeft' || e.code === 'ShiftRight'){ keys.delete('boost'); return; }
+  const dir = KEYMAP[e.code];
+  if(dir){ e.preventDefault(); keys.delete(dir); paintPad(); }
+});
+// フォーカスが外れたら必ず止める（暴走防止）
+window.addEventListener('blur', () => { keys.clear(); paintPad(); });
+
+// 画面上のパッドをマウス / タッチでも操作できるように
+document.querySelectorAll('.key[data-dir]').forEach(el => {
+  const dir = el.dataset.dir;
+  const down = e => {
+    e.preventDefault();
+    if(dir === 'stop'){ keys.clear(); stopMotor(); wasMoving = false; }
+    else keys.add(dir);
+    paintPad();
+  };
+  const up = () => { keys.delete(dir); paintPad(); };
+  el.addEventListener('pointerdown', down);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointerleave', up);
+  el.addEventListener('pointercancel', up);
+});
+
+/* ============================================================
+   ランプ : [0x03, 点灯時間(10ms, 0=無制限), 個数=1, ランプID=1, R, G, B]
+   効果音 : [0x02, 効果音ID(0〜10), 音量(0〜255)]
+   ============================================================ */
+function setLed(hex){
+  const r = parseInt(hex.substr(1, 2), 16),
+        g = parseInt(hex.substr(3, 2), 16),
+        b = parseInt(hex.substr(5, 2), 16);
+  write('light', [0x03, 0x00, 0x01, 0x01, r, g, b]);
+}
+function playSound(id){ write('sound', [0x02, id, 0x60]); }
+
+document.getElementById('led').addEventListener('input', e => setLed(e.target.value));
+document.getElementById('btnLedOff').addEventListener('click', () => write('light', [0x01]));
+
+/* ================= 通知の受信 ================= */
+function onBattery(dv){
+  const p = dv.getUint8(0);
+  document.getElementById('sBatt').textContent = p + ' %';
+  const bar = document.getElementById('battBar');
+  bar.style.width = p + '%';
+  bar.style.background = p > 40 ? 'var(--ok)' : p > 20 ? 'var(--warn)' : 'var(--err)';
+}
+function onButton(dv){
+  const pressed = dv.getUint8(1) === 0x80;
+  document.getElementById('sBtn').textContent = pressed ? '押されている' : '離されている';
+  if(pressed){ keys.clear(); paintPad(); stopMotor(); wasMoving = false; log('本体ボタン → 停止'); }
+}
+function onPositionId(dv){
+  const type = dv.getUint8(0);
+  if(type === 0x01){                       // マット上の座標
+    document.getElementById('sPos').textContent   = dv.getUint16(1, true) + ', ' + dv.getUint16(3, true);
+    document.getElementById('sAngle').textContent = dv.getUint16(5, true) + '°';
+  }else if(type === 0x02){                 // Standard ID（カード・シール）
+    document.getElementById('sPos').textContent   = 'Standard ID: ' + dv.getUint32(1, true);
+    document.getElementById('sAngle').textContent = dv.getUint16(5, true) + '°';
+  }else{                                   // 0x03 / 0x04 = マットから外れた
+    document.getElementById('sPos').textContent   = 'マット外';
+    document.getElementById('sAngle').textContent = '-';
+  }
+}
+const POSE = {1:'天面が上', 2:'底面が上', 3:'背面が上', 4:'正面が上', 5:'右側面が上', 6:'左側面が上'};
+function onSensor(dv){
+  if(dv.getUint8(0) !== 0x01) return;
+  const flat = dv.getUint8(1) === 0x00;    // 0x00 = 水平 / 0x01 = 傾斜
+  const hit  = dv.getUint8(2) === 0x01;
+  const pose = POSE[dv.byteLength > 4 ? dv.getUint8(4) : 1] || '-';
+  document.getElementById('sPose').textContent =
+    pose + (flat ? '' : ' / 傾き') + (hit ? ' / 衝突' : '');
+}
+
+/* ================= 起動時 ================= */
+document.getElementById('btnConnect').addEventListener('click', connect);
+document.getElementById('btnDisconnect').addEventListener('click', disconnect);
+document.getElementById('speed').addEventListener('input', e =>
+  document.getElementById('spdVal').textContent = e.target.value);
+document.getElementById('turn').addEventListener('input', e =>
+  document.getElementById('turnVal').textContent = e.target.value);
+
+if(!navigator.bluetooth){
+  document.getElementById('unsupported').style.display = 'block';
+  document.getElementById('btnConnect').disabled = true;
+  log('Web Bluetooth に対応していない環境です', 'err');
+}else{
+  log('準備OK。キューブの電源を入れて「キューブに接続」を押してください');
+}
+window.addEventListener('beforeunload', () => { if(connected) stopMotor(); });
+</script>
+</body>
+</html>
